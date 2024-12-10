@@ -1,6 +1,7 @@
 #include <iostream>
 #include <string>
 #include <memory>
+#include <vector>
 
 using std::cout;
 using std::cin;
@@ -8,10 +9,21 @@ using std::string;
 using std::array;
 using std::unique_ptr;
 using std::make_unique;
+using std::vector;
 // using std::move; // I choose not to use this specific name because "move" is such generic word and I don't want to potentially run into an ambiguous names issue.
+
+class IItem;
+class ItemFactory;
+enum class ItemType { Sword, HealthPotion };
+class IWeapon;
+class IActiveBuff;
+class Sword;
+class HealthPotion;
+class Inventory;
 
 class Room; //Base class for all rooms
 class IRoomFactory; 
+class IRoomVisitor; //Classes derived from Room have important data that some other classes need to access, so implementing the Visitor pattern is mostly about avoiding casts
 class PredefinedRoomFactory;//Implementation of IRoomFactory. Returns Room objects defined by the factory itself based on provided RoomTypes
 enum class RoomType { Enemy };
 class EnemyRoom; //Spawns in an enemy. The player must defeat the the enemy to move on, or game over.
@@ -24,43 +36,93 @@ enum class EnemyType { Goblin };
 class Enemy; 
 class Player;
 
-class IItem;
-class ItemFactory;
-enum class ItemType { Sword, HealthPotion };
-class IWeapon;
-class IActiveBuff;
-class Sword;
-class HealthPotion;
-
-class GameplayManager; //Runs the main game loop, takes in input, and keep track of progress and whether or not to move on, or end the game.
+class GameplayManager; //Runs the main game loop, takes in input, and keep track of progress and whether or not to move on or end the game.
 enum class GameplayStatus {Ongoing, Victory, Gameover};
 class GameDataManager;
 class IRenderer;
 class TextRenderer;
 class AsciiRenderer;
+class IRenderable;
+
+
+
+class IItem{
+public:
+    virtual string getName() = 0;
+private:
+};
+
+class IWeapon : public IItem{
+public:
+    virtual int applyDamage(unique_ptr<Actor> target, int damageModifier) = 0;
+    virtual string getName() = 0;
+private:
+};
+
+class IActiveBuff : public IItem{
+public:
+    virtual void applyBuff(unique_ptr<Actor> target) = 0;
+    virtual string getName() = 0;
+private:
+};
+
+class Sword : public IWeapon{
+public:
+    Sword(string name, int damage) : name(name), damage(damage) {}
+    
+private:
+    string name;
+    int damage;
+};
+
+class HealthPotion : public IActiveBuff{
+public:
+    HealthPotion(string name, int healAmount) : name(name), healAmount(healAmount) {}
+private:
+    string name;
+    int healAmount;
+};
+
+class Inventory{
+public:
+    Inventory(){}
+
+    vector<IWeapon> getWeapons() { return weapons; }
+    vector<IActiveBuff> getActiveBuffs() { return activeBuffs; }
+private:
+    vector<IWeapon> weapons;
+    vector<IActiveBuff> activeBuffs;
+};
 
 
 
 class Actor{
 public:
-    Actor(string name, int hp, int strength, int speed, int agility) : name(name), hp(hp), strength(strength), speed(speed), agility(agility) {}
+    Actor(string name, int hp, int strength, int speed, int agility) : name(name), hp(hp), strength(strength), speed(speed), agility(agility) {
+        inventory = make_unique<Inventory>();
+    }
     string getName() { return name; }
     int getHp() { return hp; }
     int getStrength() { return strength; }
     int getSpeed() { return speed; }
     int getAgility() { return agility; }
+    Inventory* getInventory() { return inventory.get(); }
 private:
     string name;
     int hp;
     int strength;
     int speed;
     int agility;
+
+    unique_ptr<Inventory> inventory;
 };
 
 class Enemy : public Actor{
 public:
-    Enemy(string name, int hp, int strength, int speed, int agility) : Actor(name, hp, strength, speed, agility) {}
+    Enemy(string name, int hp, int strength, int speed, int agility, EnemyType enemyType) : Actor(name, hp, strength, speed, agility), enemyType(enemyType) {}
+    EnemyType getEnemyType() { return enemyType; }
 private:
+    EnemyType enemyType;
 };
 
 class Player : public Actor{
@@ -85,11 +147,11 @@ public:
             case EnemyType::Goblin:
             {
                 //TODO: Make this create a Goblin
-                return std::move(make_unique<Enemy>("Goblin", 10, 1, 1, 2));
+                return std::move(make_unique<Enemy>("Goblin", 10, 1, 1, 2, EnemyType::Goblin));
             }
             default:
             {    
-                return std::move(make_unique<Enemy>("Goblin", 10, 1, 1, 2));
+                return std::move(make_unique<Enemy>("Goblin", 10, 1, 1, 2, EnemyType::Goblin));
             }
         }
     }
@@ -104,6 +166,7 @@ public:
 class Room{
 public:
     Room(string name, RoomType type, array<RoomType, 3> neighbors) : name(name), type(type), neighbors(neighbors) {}
+    virtual void accept(IRoomVisitor& visitor) = 0;
     RoomType getNeighbor(int index) { return neighbors[index]; }
     int getNeighborsCount() { return neighbors.size(); }
     string getName() { return name; }
@@ -115,11 +178,23 @@ private:
     array<RoomType, 3> neighbors;
 };
 
+class IRoomVisitor{
+public:
+    virtual void visit(EnemyRoom& enemyRoom) = 0;
+};
+
 class EnemyRoom: public Room{
 public:
     EnemyRoom(string name, RoomType type, array<RoomType, 3> neighbors, const IActorFactory* actorFactory): Room(name, type, neighbors), actorFactory(actorFactory) {
         enemy = std::move(actorFactory->createEnemy(EnemyType::Goblin));
     }
+
+    void accept(IRoomVisitor& visitor){
+        visitor.visit(*this);
+    }
+
+    Enemy* getEnemy() { return enemy.get(); }
+
 private:
     const IActorFactory* actorFactory;
     unique_ptr<Enemy> enemy;
@@ -165,6 +240,7 @@ public:
     string getCurrentRoomName(){ return currentRoom->getName(); }
     int getCurrentRoomNeighborCount(){ return currentRoom->getNeighborsCount(); }
     RoomType getCurrentRoomType(){ return currentRoom->getRoomType(); }
+    void currentRoomAcceptVisitor(IRoomVisitor& visitor) { currentRoom->accept(visitor); }
 
     void moveToNextRoom(){
         //Figure out what room type the new room needs to be
@@ -182,81 +258,71 @@ private:
     unique_ptr<Room> currentRoom;
 };
 
-
-
-class IItem{
-public:
-    virtual string getName() = 0;
-private:
-};
-
-class IWeapon : public IItem{
-public:
-    virtual int applyDamage(unique_ptr<Actor> target, int damageModifier) = 0;
-private:
-};
-
-class IActiveBuff : public IItem{
-public:
-    virtual void applyBuff(unique_ptr<Actor> target) = 0;
-private:
-};
-
-class Weapon : public IWeapon{
-public:
-    Weapon(string name, int damage) : name(name), damage(damage) {}
-private:
-    string name;
-    int damage;
-};
-
-class HealthPotion : public IActiveBuff{
-public:
-    HealthPotion(string name, int healAmount) : name(name), healAmount(healAmount) {}
-private:
-    string name;
-    int healAmount;
-};
-
-
-
 class GameDataManager{
 public:
-    GameDataManager(Player* player): player(player) {}
+    GameDataManager(Player* player, GameMap* map): player(player), map(map) {}
+
+    //GameDataManager tries to expose the underlying objects/pointers as little as possible
     int getPlayerHp() { return player->getHp(); }
     string getPlayerName() { return player->getName(); }
     int getPlayerSpeed() { return player->getSpeed(); }
     int getPlayerStrength() { return player->getStrength(); }
     int getPlayerAgility() { return player->getAgility(); }
+
+    string getCurrentRoomName() { return map->getCurrentRoomName(); }
+    RoomType getCurrentRoomType() { return map->getCurrentRoomType(); }
+    void moveToNextRoom() { return map->moveToNextRoom(); }
+    void currentRoomAcceptVisitor(IRoomVisitor& visitor) { map->currentRoomAcceptVisitor(visitor); }
 private:
     Player* player;
+    GameMap* map;
 };
 
-class IRenderer{
+class IRenderer: public IRoomVisitor{
 public:
-    virtual void renderGameData(GameDataManager* gameDataPtr) = 0;
     virtual ~IRenderer() = default;
+    virtual void render() = 0;
+    virtual void visit(EnemyRoom& enemyRoom) = 0;
 private:
 };
 
 class TextRenderer : public IRenderer{
 public:
-//TODO: implement renderGameData
-    void renderGameData(GameDataManager* gameDataPtr) override {
+    TextRenderer(GameDataManager* gameDataPtr): gameDataPtr(gameDataPtr){}
+
+    void render() override {
         cout << gameDataPtr->getPlayerName() << ":\n"; 
         cout << "Current HP: " << gameDataPtr->getPlayerHp() << "\n";
         cout << "Current Speed: " << gameDataPtr->getPlayerSpeed() << "\n";
         cout << "Current Strength: " << gameDataPtr->getPlayerStrength() << "\n";
         cout << "Current Agility: " << gameDataPtr->getPlayerAgility() << "\n";
-        cout << "\n";
+        cout << "\n\n";
+
+        /*
+        Will result in the visit() function of this class being called, 
+        calling the specific overload for the room's derived class, 
+        thus rendering the room correctly regardless of subtype
+        */
+        gameDataPtr->currentRoomAcceptVisitor(*this); 
+        cout << "\n\n";
+    }
+
+    //Render the enemyRoom
+    void visit(EnemyRoom& enemyRoom){
+        Enemy* enemy = enemyRoom.getEnemy();
+        cout << "A " << enemy->getName() << " bars your way! It has " << enemy->getHp() << " HP remaining.";
     }
 private:
+    void renderRoom(GameDataManager* gameDataPtr){
+    }
+
+    GameDataManager* gameDataPtr;
 };
 
 class AsciiRenderer : public IRenderer{
 public:
 //TODO: implement renderGameData
-    void renderGameData(GameDataManager* gameDataPtr) override {
+    void render() override {
         cout << "Rendering game data as ascii\n";
     }
 private:
@@ -269,7 +335,8 @@ public:
         GameplayStatus status = GameplayStatus::Ongoing;
 
         while(status == GameplayStatus::Ongoing){
-            renderer->renderGameData(gameDataManager.get());
+            renderer->render();
+            cout << "\n";
             cout << "Quit: q\nContinue: any other\n";
             cout << "Your response: ";
             char response;
@@ -297,8 +364,8 @@ int main(){
     unique_ptr<GameMap> map = make_unique<GameMap>(roomFactory.get());
 
     //Initilize the game data and renderer
-    unique_ptr<IRenderer> renderer = make_unique<TextRenderer>();
-    unique_ptr<GameDataManager> gameDataManager = make_unique<GameDataManager>(player.get());
+    unique_ptr<GameDataManager> gameDataManager = make_unique<GameDataManager>(player.get(), map.get());
+    unique_ptr<IRenderer> renderer = make_unique<TextRenderer>(gameDataManager.get());
 
     //Initialize the GameplayManager and start the game
     unique_ptr<GameplayManager> gameplayManager = make_unique<GameplayManager>(std::move(renderer), std::move(gameDataManager));
