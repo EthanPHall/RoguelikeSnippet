@@ -3,6 +3,7 @@
 #include <memory>
 #include <vector>
 #include <limits>
+#include <algorithm>
 
 using std::cout;
 using std::cin;
@@ -93,18 +94,40 @@ public:
 private:
 };
 
+
+
+class IItemFactory{
+public:
+    virtual ~IItemFactory() = default;
+    virtual void createAndStoreItem(Inventory* toStoreIn, ItemType type) = 0;
+private:
+};
+
+
+
 class PredefinedActorFactory: public IActorFactory{
 public:
+    PredefinedActorFactory(IItemFactory* itemFactory): itemFactory(itemFactory){}
+
     unique_ptr<Enemy> createEnemy(EnemyType type) const{
         switch(type){
             case EnemyType::Goblin:
             {
-                //TODO: Make this create a Goblin
-                return std::move(make_unique<Enemy>("Goblin", 10, 1, 1, 2, EnemyType::Goblin));
+                unique_ptr<Enemy> newGoblin = make_unique<Enemy>("Goblin", 10, 1, 1, 2, EnemyType::Goblin);
+
+                //Equip the Goblin with a starter Weapon
+                itemFactory->createAndStoreItem(newGoblin->getInventory(), ItemType::Sword);
+                return std::move(newGoblin);
             }
             default:
-            {    
-                return std::move(make_unique<Enemy>("Goblin", 10, 1, 1, 2, EnemyType::Goblin));
+            {
+                //TODO: Even if for no other enemy type, turn creating a goblin into its own function
+                
+                unique_ptr<Enemy> newGoblin = make_unique<Enemy>("Goblin", 10, 1, 1, 2, EnemyType::Goblin);
+
+                //Equip the Goblin with a starter Weapon
+                itemFactory->createAndStoreItem(newGoblin->getInventory(), ItemType::Sword);
+                return std::move(newGoblin);
             }
         }
     }
@@ -112,8 +135,18 @@ public:
     unique_ptr<Player> createPlayer() const{
         unique_ptr<Player> newPlayer = make_unique<Player>("Player", 100, 1, 1, 1);
 
+        //Equip the Player with a starter Weapon
+        itemFactory->createAndStoreItem(newPlayer->getInventory(), ItemType::Sword);
+
+        //Equip the Player with a health potion
+        itemFactory->createAndStoreItem(newPlayer->getInventory(), ItemType::HealthPotion);
+
+
         return std::move(newPlayer);
     }
+
+private:
+    IItemFactory* itemFactory;
 };
 
 
@@ -123,6 +156,8 @@ public:
 class IItem{
 public:
     virtual string getName() = 0;
+    virtual bool isSingleUse() = 0;
+    virtual ItemType getType() = 0;
 private:
 };
 
@@ -130,6 +165,9 @@ class IWeapon : public IItem{
 public:
     virtual void applyDamage(Actor& user, Actor& target) = 0;
     virtual string getName() = 0;
+    virtual bool isSingleUse() = 0;
+    virtual ItemType getType() = 0;
+    virtual int getExpectedDamage(Actor& user) = 0;
 private:
 };
 
@@ -138,24 +176,39 @@ public:
     virtual void applyBuff(Actor& target) = 0;
     virtual string getName() = 0;
     virtual string getBuffAction() = 0;
+    virtual bool isSingleUse() = 0;
+    virtual ItemType getType() = 0;
+    virtual int getMagnitude() = 0;
 private:
 };
 
 class Sword : public IWeapon{
 public:
-    Sword(string name, int damage) : name(name), damage(damage) {}
+    Sword(string name, int damage, ItemType itemType) : name(name), damage(damage), itemType(itemType) {}
     string getName(){ return name; }
     void applyDamage(Actor& user, Actor& target){
+        int damageToDeal = getExpectedDamage(user);
+        target.modHp(-damageToDeal);
+    }
+    bool isSingleUse(){
+        return false;
+    }
+    ItemType getType() {
+        return itemType;
+    }
+    int getExpectedDamage(Actor& user){
         int damageToDeal = damage + user.getAgility() + user.getStrength();
+        return damageToDeal;
     }
 private:
     string name;
     int damage;
+    ItemType itemType;
 };
 
 class HealthPotion : public IActiveBuff{
 public:
-    HealthPotion(string name, int healAmount) : name(name), healAmount(healAmount) {}
+    HealthPotion(string name, int healAmount, ItemType itemType) : name(name), healAmount(healAmount), itemType(itemType) {}
     string getName(){
         return name;
     }
@@ -165,9 +218,19 @@ public:
     void applyBuff(Actor& target){
         target.modHp(healAmount);
     }
+    bool isSingleUse(){
+        return true;
+    }
+    ItemType getType(){
+        return itemType;
+    }
+    int getMagnitude(){
+        return healAmount;
+    }
 private:
     string name;
     int healAmount;
+    ItemType itemType;
 };
 
 class Inventory{
@@ -197,16 +260,53 @@ public:
     void transferActiveBuffOwnership(unique_ptr<IActiveBuff> newBuff){
         activeBuffs.push_back(std::move(newBuff));
     }
+    void removeItem(IItem* toRemove){
+        switch(toRemove->getType()){
+            case ItemType::Sword:{
+                removeWeapon(toRemove);
+            }
+            case ItemType::HealthPotion:{
+                removeActiveBuff(toRemove);
+            }
+        }
+    }
+
+    int getTotalItems(){
+        return weapons.size() + activeBuffs.size();
+    }
 private:
     vector<unique_ptr<IWeapon>> weapons;
     vector<unique_ptr<IActiveBuff>> activeBuffs;
-};
 
-class IItemFactory{
-public:
-    virtual ~IItemFactory() = default;
-    virtual void createAndStoreItem(Inventory* toStoreIn, ItemType type) = 0;
-private:
+    //TODO: Simplify the remove methods here with a function that can handle any uniquePointer<IItem> vector. Maybe a template?
+    void removeWeapon(IItem* toRemove){
+        //Try to find the first weapon that shares a name with the one to remove.
+        auto weaponsIt = 
+            std::find_if(
+                weapons.begin(), 
+                weapons.end(), 
+                [toRemove](unique_ptr<IWeapon>& weaponInList) { return weaponInList->getName() == toRemove->getName(); }
+            );
+
+        //If the weapon was found, erase it.
+        if(weaponsIt != weapons.end()){
+            weapons.erase(weaponsIt);
+        }
+    }
+    void removeActiveBuff(IItem* toRemove){
+        //Try to find the first activeBuff that shares a name with the one to remove.
+        auto buffsIt = 
+            std::find_if(
+                activeBuffs.begin(), 
+                activeBuffs.end(), 
+                [toRemove](unique_ptr<IActiveBuff>& buffInList) { return buffInList->getName() == toRemove->getName(); }
+            );
+
+        //If the weapon was found, erase it.
+        if(buffsIt != activeBuffs.end()){
+            activeBuffs.erase(buffsIt);
+        }
+    }
 };
 
 class PredefinedItemFactory: public IItemFactory{
@@ -214,12 +314,17 @@ public:
     void createAndStoreItem(Inventory* toStoreIn, ItemType type){
         switch(type){
             case ItemType::Sword:{
-                unique_ptr<Sword> newSword = make_unique<Sword>("Sword", 3);
+                unique_ptr<Sword> newSword = make_unique<Sword>("Sword", 3, ItemType::Sword);
                 toStoreIn->transferWeaponOwnership(std::move(newSword));
+                break;
             }
             case ItemType::HealthPotion:{
-                unique_ptr<HealthPotion> newPotion = make_unique<HealthPotion>("Health Potion", 20);
+                unique_ptr<HealthPotion> newPotion = make_unique<HealthPotion>("Health Potion", 20, ItemType::HealthPotion);
                 toStoreIn->transferActiveBuffOwnership(std::move(newPotion));
+                break;
+            }
+            default:{
+                //Do Nothing
             }
         }
     }
@@ -234,6 +339,7 @@ class Room{
 public:
     Room(string name, RoomType type, array<RoomType, 3> neighbors) : name(name), type(type), neighbors(neighbors) {}
     virtual void accept(IRoomVisitor& visitor) = 0;
+    virtual bool isCleared() = 0;
     RoomType getNeighbor(int index) { return neighbors[index]; }
     int getNeighborsCount() { return neighbors.size(); }
     string getName() { return name; }
@@ -256,8 +362,12 @@ public:
         enemy = std::move(actorFactory->createEnemy(EnemyType::Goblin));
     }
 
-    void accept(IRoomVisitor& visitor){
+    void accept(IRoomVisitor& visitor) override{
         visitor.visit(*this);
+    }
+
+    bool isCleared() override{
+        return enemy->getHp() <= 0;
     }
 
     Enemy* getEnemy() { return enemy.get(); }
@@ -308,6 +418,7 @@ public:
     int getCurrentRoomNeighborCount(){ return currentRoom->getNeighborsCount(); }
     RoomType getCurrentRoomType(){ return currentRoom->getRoomType(); }
     void currentRoomAcceptVisitor(IRoomVisitor& visitor) { currentRoom->accept(visitor); }
+    bool isCurrentRoomCleared() { return currentRoom->isCleared(); }
 
     void moveToNextRoom(){
         //Figure out what room type the new room needs to be
@@ -320,6 +431,7 @@ public:
         //Transfer ownership of the newRoom to currentRoom. newRoom, now owning the previous currentRoom, is left to go out of scope.
         std::swap(newRoom, currentRoom);
     }
+
 private:
     IRoomFactory* roomFactory;
     unique_ptr<Room> currentRoom;
@@ -355,12 +467,11 @@ public:
         Player* player = gameDataPtr->getPlayer();
         GameMap* map = gameDataPtr->getMap();
 
-        cout << player->getName() << ":\n"; 
+        cout << "\n" << player->getName() << ":\n"; 
         cout << "Current HP: " << player->getHp() << "\n";
         cout << "Current Speed: " << player->getSpeed() << "\n";
         cout << "Current Strength: " << player->getStrength() << "\n";
         cout << "Current Agility: " << player->getAgility() << "\n";
-        cout << "\n\n";
 
         /*
         Will result in the visit() function of this class being called, 
@@ -368,18 +479,14 @@ public:
         thus rendering the room correctly regardless of room type
         */
         map->currentRoomAcceptVisitor(*this); 
-        cout << "\n\n";
     }
 
     //Render the enemyRoom
     void visit(EnemyRoom& enemyRoom){
         Enemy* enemy = enemyRoom.getEnemy();
-        cout << "A " << enemy->getName() << " bars your way! It has " << enemy->getHp() << " HP remaining.";
+        cout << "\nA " << enemy->getName() << " bars your way! It has " << enemy->getHp() << " HP remaining.\n";
     }
 private:
-    void renderRoom(GameDataManager* gameDataPtr){
-    }
-
     GameDataManager* gameDataPtr;
 };
 
@@ -392,6 +499,17 @@ public:
 private:
 };
 
+class IActionHandler: public IRoomVisitor{
+public:
+    virtual ~IActionHandler() = default;
+
+    //Diplay options and take input for those options.
+    virtual void visit(EnemyRoom& enemyRoom) = 0;
+
+    //Display actions and take input for them, depending on room type.
+    virtual void startActionHandling(GameMap* gameMap) = 0;
+};
+
 class GameplayManager{
 public:
     GameplayManager(unique_ptr<IRenderer> renderer, unique_ptr<GameDataManager> gameDataManager, unique_ptr<IActionHandler> actionHandler) : renderer(std::move(renderer)), gameDataManager(std::move(gameDataManager)), actionHandler(std::move(actionHandler)) {}
@@ -401,17 +519,21 @@ public:
         while(status == GameplayStatus::Ongoing){
             renderer->render();
 
-            //Display actions and take input for them, depending on room type.
-            // gameDataManager->getMap()->currentRoomAcceptVisitor(*actionHandler.get());
+            actionHandler->startActionHandling(gameDataManager->getMap());
 
-            cout << "\n";
-            cout << "Quit: q\nContinue: any other\n";
-            cout << "Your response: ";
-            char response;
-            cin >> response;
+            if(gameDataManager->getMap()->isCurrentRoomCleared()){
+                cout << "\nThe room is clear now. Venture further in?\n";
+                cout << "Quit: q\nContinue: any other\n";
+                cout << "Your response: ";
+                char response;
+                cin >> response;
 
-            if(response == 'q'){
-                status = GameplayStatus::Gameover;
+                if(response == 'q'){
+                    status = GameplayStatus::Gameover;
+                }
+                else{
+                    gameDataManager->getMap()->moveToNextRoom();
+                }
             }
         }
     }
@@ -421,18 +543,34 @@ private:
     unique_ptr<IActionHandler> actionHandler;
 };
 
-class IActionHandler: public IRoomVisitor{
-public:
-    virtual ~IActionHandler() = default;
-
-    //Diplay options and take input for those options.
-    virtual void visit(EnemyRoom& enemyRoom) = 0;
-};
-
 class ConsoleActionHandler: public IActionHandler{
 public:
     ConsoleActionHandler(GameDataManager* gameDataManager): gameDataManager(gameDataManager){}
+
+    void startActionHandling(GameMap* gameMap){
+        gameMap->currentRoomAcceptVisitor(*this);
+    }
+
     void visit(EnemyRoom& enemyRoom){
+        Enemy* enemy = enemyRoom.getEnemy();
+        executePlayerCombatTurn(enemyRoom);
+        
+        if(enemyRoom.isCleared()){
+            cout << "\nYou defeated the " << enemyRoom.getEnemy()->getName() << "!\n";
+        }
+        else{
+            cout << "\nThe " << enemy->getName() << " is still standing at " << enemy->getHp() << " HP. It prepares to attack!\n";
+            cout << "Input any key to continue... ";
+            string throwaway;
+            cin >> throwaway;
+            executeEnemyCombatTurn(enemyRoom);
+        }
+    }
+private:
+    GameDataManager* gameDataManager;
+
+    void executePlayerCombatTurn(EnemyRoom& enemyRoom){
+        cout << "\n\n-------- Player Turn --------\n";
         Inventory* playerInventory = gameDataManager->getPlayer()->getInventory();
         vector<IWeapon*> weapons = playerInventory->getWeapons();
         vector<IActiveBuff*> activeBuffs = playerInventory->getActiveBuffs();
@@ -445,23 +583,25 @@ public:
 
         //Display weapon actions first, and then buff actions
         for(IWeapon* weapon: weapons){
-            cout << optionNumber << ": Attack (" << weapon->getName() << ")";
+            cout << optionNumber << ": Attack (" << weapon->getName() << ")\n";
             optionNumber++;
         }
         for(IActiveBuff* buff: activeBuffs){
-            cout << optionNumber << ": " << buff->getBuffAction() << " (" << buff->getName() << ")";
+            cout << optionNumber << ": " << buff->getBuffAction() << " (" << buff->getName() << ")\n";
             optionNumber++;
         }
 
-        //optionNumber has been incremented and now represents the last valid option
-        cout << "\n\nInput your selection (1 - " << optionNumber << ") ";
+        //optionNumber has been incremented one additional time and now equals one more than the last valid option
+        int lastValidOption = optionNumber - 1;
+
+        cout << "\nInput your selection (1 - " << lastValidOption << ") ";
 
         //TODO: Add a quit option to this.
         int optionSelected = -1;
         bool initialLoopCompleted = false;
-        while(optionSelected < 1 || optionSelected > optionNumber){
+        while(optionSelected < 1 || optionSelected > lastValidOption){
             if(initialLoopCompleted){
-                cout << "\nEnter a number between 1 and " << optionNumber << ".";
+                cout << "\nEnter a number between 1 and " << lastValidOption << ".";
             }
             
             cin >> optionSelected;
@@ -477,35 +617,87 @@ public:
         //Reset optionNumber and loop through the items again until option number has been incremented back up to
         //the chosen option, and execute the action for the item corresponging to that option.
         optionNumber = 1;
-        bool optionFound = false;
+        IItem* itemUsed = nullptr; //Relevant for things like single use items that will be handled later.
         for(IWeapon* weapon: weapons){
             if(optionNumber == optionSelected){
-                optionFound = true;
+                itemUsed = weapon;
                 weapon->applyDamage(*gameDataManager->getPlayer(), *enemyRoom.getEnemy());
             }
 
             optionNumber++;
         }
 
-        if(!optionFound){
+        if(itemUsed == nullptr){
             for(IActiveBuff* buff: activeBuffs){
                 if(optionNumber == optionSelected){
-                    optionFound = true;
+                    itemUsed = buff;
                     buff->applyBuff(*gameDataManager->getPlayer());
                 }
 
                 optionNumber++;
             }
         }
+
+        //We need to remove the item from the inventory if it is marked as single use.
+        if(itemUsed != nullptr && itemUsed->isSingleUse()){
+            playerInventory->removeItem(itemUsed);
+        }
+
+        cout << "\n-------- End Player Turn --------\n\n";
     }
-private:
-    GameDataManager* gameDataManager;
+
+    void executeEnemyCombatTurn(EnemyRoom& enemyRoom){
+        cout << "\n\n-------- Enemy Turn --------\n";
+
+        //We need the enemy's potential actions, which is just their inventory items.
+        Enemy* enemy = enemyRoom.getEnemy();
+        Inventory* enemyInventory = enemy->getInventory();
+        int potentialItemsToUse = enemyInventory->getTotalItems();
+
+        //Now pick the specific action to use. TODO: Make this random.
+        int itemToUse = 1;
+
+        //Find the specified item and execute its action.
+        vector<IWeapon*> weapons = enemyInventory->getWeapons();
+        vector<IActiveBuff*> activeBuffs = enemyInventory->getActiveBuffs();
+        int currentItemNumber = 1;
+        IItem* itemUsed = nullptr; //Needed for if something happens to the item upon use, such as with single use items.
+        for(IWeapon* weapon: weapons){
+            if(currentItemNumber == itemToUse){
+                cout << "\nThe " << enemy->getName() << " attacks with its " << weapon->getName() << " for " << weapon->getExpectedDamage(*enemy) << " damage.\n";
+                weapon->applyDamage(*enemy, *gameDataManager->getPlayer());
+                itemUsed = weapon;
+            }
+
+            currentItemNumber++;
+        }
+
+        if(itemUsed == nullptr){
+            for(IActiveBuff* buff: activeBuffs){
+                if(currentItemNumber == itemToUse){
+                    cout << "\nThe " << enemy->getName() << " uses its " << buff->getName() << " to " << buff->getBuffAction() << " for " << buff->getMagnitude() << " points.\n";
+                    buff->applyBuff(*enemy);
+                    itemUsed = buff;
+                }
+            }
+
+            currentItemNumber++;
+        }
+
+        //We need to remove the item from the inventory if it is marked as single use.
+        if(itemUsed != nullptr && itemUsed->isSingleUse()){
+            enemyInventory->removeItem(itemUsed);
+        }
+
+        cout << "\n-------- End Enemy Turn --------\n\n";
+    }
 };
 
 
 int main(){
     //Initialize the Player
-    unique_ptr<IActorFactory> actorFactory = make_unique<PredefinedActorFactory>();
+    unique_ptr<IItemFactory> itemFactory = make_unique<PredefinedItemFactory>();
+    unique_ptr<IActorFactory> actorFactory = make_unique<PredefinedActorFactory>(itemFactory.get());
     unique_ptr<Player> player = actorFactory->createPlayer();
 
     //Initialize the Map
