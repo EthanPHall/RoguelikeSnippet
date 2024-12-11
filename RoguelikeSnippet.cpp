@@ -13,18 +13,31 @@ using std::unique_ptr;
 using std::make_unique;
 using std::vector;
 // using std::move; // I choose not to use this specific name because "move" is such generic word and I don't want to potentially run into an ambiguous names issue.
-
+    
 class Actor; //Base class for all Actors, objects that simulate characters, creatures, and any other entity that has agency in how it acts
 class IActorFactory; //Interface for Actor factories
 class PredefinedActorFactory; //Actor Factory implementation that creates and returns actors defined by the factory itself
 enum class EnemyType { Goblin };
-class Enemy; 
+class Enemy;
 class Player;
 
 class IItem;
 class IItemFactory;
 class PredefinedItemFactory;
 enum class ItemType { Sword, HealthPotion };
+string itemTypeToName(ItemType type){
+    switch(type){
+        case ItemType::Sword:{
+            return "Sword";
+        }
+        case ItemType::HealthPotion:{
+            return "Health Potion";
+        }
+        default:{
+            return "";
+        }
+    }
+}
 class IWeapon;
 class IActiveBuff;
 class Sword;
@@ -32,7 +45,7 @@ class HealthPotion;
 class Inventory;
 
 class Room; //Base class for all rooms
-class IRoomFactory; 
+class IRoomFactory;
 class IRoomVisitor; //Classes derived from Room have important data that some other classes need to access, so implementing the Visitor pattern is mostly about avoiding casts
 class PredefinedRoomFactory;//Implementation of IRoomFactory. Returns Room objects defined by the factory itself based on provided RoomTypes
 enum class RoomType { Enemy };
@@ -73,10 +86,12 @@ private:
 
 class Enemy : public Actor{
 public:
-    Enemy(string name, int hp, int strength, int speed, int agility, EnemyType enemyType) : Actor(name, hp, strength, speed, agility), enemyType(enemyType) {}
+    Enemy(string name, int hp, int strength, int speed, int agility, EnemyType enemyType, vector<ItemType> rewards) : Actor(name, hp, strength, speed, agility), enemyType(enemyType), rewards(rewards) {}
     EnemyType getEnemyType() { return enemyType; }
+    vector<ItemType> getRewards(){ return rewards; }
 private:
     EnemyType enemyType;
+    vector<ItemType> rewards;
 };
 
 class Player : public Actor{
@@ -99,7 +114,7 @@ private:
 class IItemFactory{
 public:
     virtual ~IItemFactory() = default;
-    virtual void createAndStoreItem(Inventory* toStoreIn, ItemType type) = 0;
+    virtual void createAndStoreItem(Inventory* toStoreIn, ItemType type) const = 0;
 private:
 };
 
@@ -113,20 +128,26 @@ public:
         switch(type){
             case EnemyType::Goblin:
             {
-                unique_ptr<Enemy> newGoblin = make_unique<Enemy>("Goblin", 10, 1, 1, 2, EnemyType::Goblin);
+                //Set the rewards. TODO: Randomize rewards.
+                vector<ItemType> rewards = {ItemType::HealthPotion};
+
+                unique_ptr<Enemy> newGoblin = make_unique<Enemy>("Goblin", 10, 1, 1, 2, EnemyType::Goblin, rewards);
 
                 //Equip the Goblin with a starter Weapon
                 itemFactory->createAndStoreItem(newGoblin->getInventory(), ItemType::Sword);
+
                 return std::move(newGoblin);
             }
             default:
             {
-                //TODO: Even if for no other enemy type, turn creating a goblin into its own function
-                
-                unique_ptr<Enemy> newGoblin = make_unique<Enemy>("Goblin", 10, 1, 1, 2, EnemyType::Goblin);
+                //Set the rewards. TODO: Randomize rewards.
+                vector<ItemType> rewards = {ItemType::HealthPotion};
+
+                unique_ptr<Enemy> newGoblin = make_unique<Enemy>("Goblin", 10, 1, 1, 2, EnemyType::Goblin, rewards);
 
                 //Equip the Goblin with a starter Weapon
                 itemFactory->createAndStoreItem(newGoblin->getInventory(), ItemType::Sword);
+
                 return std::move(newGoblin);
             }
         }
@@ -140,7 +161,6 @@ public:
 
         //Equip the Player with a health potion
         itemFactory->createAndStoreItem(newPlayer->getInventory(), ItemType::HealthPotion);
-
 
         return std::move(newPlayer);
     }
@@ -281,10 +301,10 @@ private:
     //TODO: Simplify the remove methods here with a function that can handle any uniquePointer<IItem> vector. Maybe a template?
     void removeWeapon(IItem* toRemove){
         //Try to find the first weapon that shares a name with the one to remove.
-        auto weaponsIt = 
+        auto weaponsIt =
             std::find_if(
-                weapons.begin(), 
-                weapons.end(), 
+                weapons.begin(),
+                weapons.end(),
                 [toRemove](unique_ptr<IWeapon>& weaponInList) { return weaponInList->getName() == toRemove->getName(); }
             );
 
@@ -295,10 +315,10 @@ private:
     }
     void removeActiveBuff(IItem* toRemove){
         //Try to find the first activeBuff that shares a name with the one to remove.
-        auto buffsIt = 
+        auto buffsIt =
             std::find_if(
-                activeBuffs.begin(), 
-                activeBuffs.end(), 
+                activeBuffs.begin(),
+                activeBuffs.end(),
                 [toRemove](unique_ptr<IActiveBuff>& buffInList) { return buffInList->getName() == toRemove->getName(); }
             );
 
@@ -311,7 +331,7 @@ private:
 
 class PredefinedItemFactory: public IItemFactory{
 public:
-    void createAndStoreItem(Inventory* toStoreIn, ItemType type){
+    void createAndStoreItem(Inventory* toStoreIn, ItemType type) const {
         switch(type){
             case ItemType::Sword:{
                 unique_ptr<Sword> newSword = make_unique<Sword>("Sword", 3, ItemType::Sword);
@@ -340,6 +360,7 @@ public:
     Room(string name, RoomType type, array<RoomType, 3> neighbors) : name(name), type(type), neighbors(neighbors) {}
     virtual void accept(IRoomVisitor& visitor) = 0;
     virtual bool isCleared() = 0;
+    virtual void bestowRewards(Player* player) = 0;
     RoomType getNeighbor(int index) { return neighbors[index]; }
     int getNeighborsCount() { return neighbors.size(); }
     string getName() { return name; }
@@ -358,7 +379,7 @@ public:
 
 class EnemyRoom: public Room{
 public:
-    EnemyRoom(string name, RoomType type, array<RoomType, 3> neighbors, const IActorFactory* actorFactory): Room(name, type, neighbors), actorFactory(actorFactory) {
+    EnemyRoom(string name, RoomType type, array<RoomType, 3> neighbors, const IActorFactory* actorFactory, const IItemFactory* itemFactory): Room(name, type, neighbors), actorFactory(actorFactory), itemFactory(itemFactory) {
         enemy = std::move(actorFactory->createEnemy(EnemyType::Goblin));
     }
 
@@ -370,10 +391,18 @@ public:
         return enemy->getHp() <= 0;
     }
 
+    void bestowRewards(Player* player){
+        //For each reward item defined by the enemy, create it and add it to the player's inventory
+        for(ItemType item : enemy->getRewards()){
+            itemFactory->createAndStoreItem(player->getInventory(), item);
+        }
+    }
+
     Enemy* getEnemy() { return enemy.get(); }
 
 private:
     const IActorFactory* actorFactory;
+    const IItemFactory* itemFactory;
     unique_ptr<Enemy> enemy;
 };
 
@@ -385,23 +414,24 @@ public:
 
 class PredefinedRoomFactory : public IRoomFactory{
 public:
-    PredefinedRoomFactory(const IActorFactory* actorFactory): actorFactory(actorFactory){}
+    PredefinedRoomFactory(const IActorFactory* actorFactory, const IItemFactory *itemFactory): actorFactory(actorFactory), itemFactory(itemFactory){}
     unique_ptr<Room> createRoom(RoomType type){
         switch(type){
             case RoomType::Enemy:
             {
                 array<RoomType, 3> neighbors {RoomType::Enemy, RoomType::Enemy, RoomType::Enemy};
-                return std::move(make_unique<EnemyRoom>("Enemy Room", RoomType::Enemy, neighbors, actorFactory));
+                return std::move(make_unique<EnemyRoom>("Enemy Room", RoomType::Enemy, neighbors, actorFactory, itemFactory));
             }
             default:
             {
                 array<RoomType, 3> neighbors {RoomType::Enemy, RoomType::Enemy, RoomType::Enemy};
-                return std::move(make_unique<EnemyRoom>("Enemy Room", RoomType::Enemy, neighbors, actorFactory));
+                return std::move(make_unique<EnemyRoom>("Enemy Room", RoomType::Enemy, neighbors, actorFactory, itemFactory));
             }
         }
     }
 private:
     const IActorFactory* actorFactory;
+    const IItemFactory* itemFactory;
 };
 
 class GameMap{
@@ -432,6 +462,10 @@ public:
         std::swap(newRoom, currentRoom);
     }
 
+    void bestowRewards(Player* player){
+        currentRoom->bestowRewards(player);
+    }
+
 private:
     IRoomFactory* roomFactory;
     unique_ptr<Room> currentRoom;
@@ -455,6 +489,7 @@ class IRenderer: public IRoomVisitor{
 public:
     virtual ~IRenderer() = default;
     virtual void render() = 0;
+    virtual void renderClearedRoom() = 0;
     virtual void visit(EnemyRoom& enemyRoom) = 0;
 private:
 };
@@ -464,30 +499,51 @@ public:
     TextRenderer(GameDataManager* gameDataPtr): gameDataPtr(gameDataPtr){}
 
     void render() override {
+        renderClearedVersion = false;
+
         Player* player = gameDataPtr->getPlayer();
         GameMap* map = gameDataPtr->getMap();
 
-        cout << "\n" << player->getName() << ":\n"; 
+        cout << "\n" << player->getName() << ":\n";
         cout << "Current HP: " << player->getHp() << "\n";
         cout << "Current Speed: " << player->getSpeed() << "\n";
         cout << "Current Strength: " << player->getStrength() << "\n";
         cout << "Current Agility: " << player->getAgility() << "\n";
 
         /*
-        Will result in the visit() function of this class being called, 
-        calling the specific overload for the room's derived class, 
+        Will result in the visit() function of this class being called,
+        calling the specific overload for the room's derived class,
         thus rendering the room correctly regardless of room type
         */
-        map->currentRoomAcceptVisitor(*this); 
+        map->currentRoomAcceptVisitor(*this);
+    }
+
+    void renderClearedRoom() override{
+        renderClearedVersion = true;
+
+        Player* player = gameDataPtr->getPlayer();
+        GameMap* map = gameDataPtr->getMap();
+
+        map->currentRoomAcceptVisitor(*this);
     }
 
     //Render the enemyRoom
     void visit(EnemyRoom& enemyRoom){
         Enemy* enemy = enemyRoom.getEnemy();
-        cout << "\nA " << enemy->getName() << " bars your way! It has " << enemy->getHp() << " HP remaining.\n";
+        if(renderClearedVersion){
+            cout << "\nThe " << enemy->getName() << " was carrying some loot. Obtained:\n";
+            for(ItemType item : enemy->getRewards()){
+                cout << itemTypeToName(item) << "\n";
+            }
+        }
+        else{
+            cout << "\nA " << enemy->getName() << " bars your way! It has " << enemy->getHp() << " HP remaining.\n";
+        }
+
     }
 private:
     GameDataManager* gameDataPtr;
+    bool renderClearedVersion = false;
 };
 
 class AsciiRenderer : public IRenderer{
@@ -517,12 +573,19 @@ public:
         GameplayStatus status = GameplayStatus::Ongoing;
 
         while(status == GameplayStatus::Ongoing){
+            //TODO: Renderer should take in action handler and work with it to display the action options. actionhandler shouldn't be rendering things itself.
             renderer->render();
 
             actionHandler->startActionHandling(gameDataManager->getMap());
 
             if(gameDataManager->getMap()->isCurrentRoomCleared()){
-                cout << "\nThe room is clear now. Venture further in?\n";
+                //Render the room in its cleared state.
+                renderer->renderClearedRoom();
+
+                //Bestow the rewards for clearing the room on the player.
+                gameDataManager->getMap()->bestowRewards(gameDataManager->getPlayer());
+
+                cout << "\nVenture further in?\n";
                 cout << "Quit: q\nContinue: any other\n";
                 cout << "Your response: ";
                 char response;
@@ -554,7 +617,7 @@ public:
     void visit(EnemyRoom& enemyRoom){
         Enemy* enemy = enemyRoom.getEnemy();
         executePlayerCombatTurn(enemyRoom);
-        
+
         if(enemyRoom.isCleared()){
             cout << "\nYou defeated the " << enemyRoom.getEnemy()->getName() << "!\n";
         }
@@ -577,7 +640,7 @@ private:
 
         cout << "\n";
         cout << "What will you do?\n";
-        
+
         //Keep track of the option number
         int optionNumber = 1;
 
@@ -603,7 +666,7 @@ private:
             if(initialLoopCompleted){
                 cout << "\nEnter a number between 1 and " << lastValidOption << ".";
             }
-            
+
             cin >> optionSelected;
 
             if(cin.fail()){
@@ -701,7 +764,7 @@ int main(){
     unique_ptr<Player> player = actorFactory->createPlayer();
 
     //Initialize the Map
-    unique_ptr<IRoomFactory> roomFactory = make_unique<PredefinedRoomFactory>(actorFactory.get());
+    unique_ptr<IRoomFactory> roomFactory = make_unique<PredefinedRoomFactory>(actorFactory.get(), itemFactory.get());
     unique_ptr<GameMap> map = make_unique<GameMap>(roomFactory.get());
 
     //Initilize the game data and renderer
