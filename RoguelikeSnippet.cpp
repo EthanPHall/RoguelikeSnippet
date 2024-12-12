@@ -548,11 +548,150 @@ private:
 
 class AsciiRenderer : public IRenderer{
 public:
-//TODO: implement renderGameData
+    AsciiRenderer(GameDataManager* gameDataPtr):gameDataPtr(gameDataPtr){}
+
     void render() override {
-        cout << "Rendering game data as ascii\n";
+        gameDataPtr->getMap()->currentRoomAcceptVisitor(*this);
     }
+    void renderClearedRoom() {
+
+    };
+
+    //Render the EnemyRoom
+    void visit(EnemyRoom& enemyRoom) {
+        //The map needs to be customized based on how much space the actors take up, as well as having a few random elements thrown in. So it gets built up throughout this function.
+        vector<string> asciiRepresentation;
+
+        //How long does the room need to be? We want to display the stats of the actors in this room, so we need to account for how much screen space that takes up.
+        const string hpLabel = "HP: ";
+        const string strengthLabel = "Str: ";
+        const string speedLabel = "Spe: ";
+        const string agilityLabel = "Agi: ";
+        
+        Player* player = gameDataPtr->getPlayer();
+        const string playerHpDigits = getDigits(player->getHp());
+        const string playerStrengthDigits = getDigits(player->getStrength());
+        const string playerSpeedDigits = getDigits(player->getSpeed());
+        const string playerAgilityDigits = getDigits(player->getAgility());
+
+        Enemy* enemy = enemyRoom.getEnemy();
+        const string enemyHpDigits = getDigits(enemy->getHp());
+        const string enemyStrengthDigits = getDigits(enemy->getStrength());
+        const string enemySpeedDigits = getDigits(enemy->getSpeed());
+        const string enemyAgilityDigits = getDigits(enemy->getAgility());
+
+        const int paddingBetweenStats = 2;//The padding that separates the HP stats from the Strength stat, ie: HP: 10  Strength: 1, those couple spaces between them 
+        const int playerStrengthAndHpSectionLength = hpLabel.length() + strengthLabel.length() + playerHpDigits.length() + playerStrengthDigits.length() + paddingBetweenStats;//HP will be displayed side-by-side with Strength
+        const int enemyStrengthAndHpSectionLength = hpLabel.length() + strengthLabel.length() + enemyHpDigits.length() + enemyStrengthDigits.length() + paddingBetweenStats;
+        const int playerSpeedAndAgilitySectionLength = speedLabel.length() + agilityLabel.length() + playerSpeedDigits.length() + playerAgilityDigits.length() + paddingBetweenStats;//Speed will be displayed side-by-side with Agility
+        const int enemySpeedAndAgilitySectionLength = speedLabel.length() + agilityLabel.length() + enemySpeedDigits.length() + enemyAgilityDigits.length() + paddingBetweenStats;
+
+        const int paddingBetweenCombatants = 5;
+        const int hpAndStrengthRowLength = playerStrengthAndHpSectionLength + paddingBetweenCombatants + enemyStrengthAndHpSectionLength;
+        const int speedAndAgilityRowLength = playerSpeedAndAgilitySectionLength + paddingBetweenCombatants + enemySpeedAndAgilitySectionLength;
+
+
+        const int roomLength = std::max(hpAndStrengthRowLength, speedAndAgilityRowLength) + 2*paddingFromWalls + 2*wallThickness;
+
+        //How tall does the room need to be? Much simpler calculation. 
+        const int paddingFromCeiling = 1;
+        const int roomHeight = 3 + 2*paddingFromCeiling + 2*wallThickness;//room height = player/enemy row (1) + stat rows (2) + 2*ceiling padding + 2*wall thickness. TODO: Add a random component to this to make the room slightly taller/shorter than others of the same type, and do the same for the length.
+
+        //What positions should the player and enemy characters be at? The characters themselves, not the stats
+        const int playerX = std::max(playerStrengthAndHpSectionLength, playerSpeedAndAgilitySectionLength)/2 + paddingFromWalls + wallThickness;//Place it towards the middle of the stats
+        const int playerY = roomHeight/2;
+
+        const int enemyX = std::max(enemyStrengthAndHpSectionLength, enemySpeedAndAgilitySectionLength)/2 + paddingBetweenCombatants + paddingFromWalls + wallThickness;
+        const int enemyY = playerY;
+
+        //What positions should the stats be at?
+        const int playerStatsX = paddingFromWalls + wallThickness;
+        const int statsY = playerY + 1; //Y=0 is at the top, so +1 means 1 down in this case.
+
+        //Build the room
+        for(int y = 0; y < roomHeight; y++){
+            string newRow = "";
+            for(int x = 0; x < roomLength; x++){
+                if(y < wallThickness || y >= roomHeight - wallThickness){//Insert the ceiling/floor
+                    newRow.push_back('#');
+                }
+                else if(x < wallThickness || x >= roomLength - wallThickness){//Insert the right/left walls
+                    newRow.push_back('#');
+                }
+                else if(y < paddingFromCeiling + wallThickness || y >= roomHeight - paddingFromCeiling - wallThickness){//insert ceiling/floor padding
+                    newRow.push_back(' ');
+                }
+                else if(x < paddingFromWalls + wallThickness || x >= roomLength - paddingFromWalls - wallThickness){//insert wall padding
+                    newRow.push_back(' ');
+                }
+                else if(x == playerX && y == playerY){//Place the player
+                    newRow.push_back('@');
+                }
+                else if(x == enemyX && y == enemyY){//Place the enemy
+                    newRow.push_back(enemy->getName()[0]);
+                }
+                else if(y == statsY && x == playerStatsX){//Place the player and enemy hp and strength stats. This particular if places almost the entire row, and sets x directly as part of that.
+                    const string combatantPaddingString {' ', paddingBetweenCombatants};
+                    const string statsPaddingString {' ', paddingBetweenStats};
+                    newRow += hpLabel + playerHpDigits + statsPaddingString + strengthLabel + playerStrengthDigits; //Start with the player stats
+                    newRow += combatantPaddingString; //Enemy stats start as soon as the combatant padding ends
+                    newRow += hpLabel + enemyHpDigits + statsPaddingString + strengthLabel + enemyStrengthDigits;
+
+                    const int longestStatRowLength = std::max(hpAndStrengthRowLength, speedAndAgilityRowLength);
+                    x += longestStatRowLength; //Increase x to account for all of the characters we've added to this row.
+                }
+                // else if(y == statsY+1 && x == playerStatsX){//Place the player and enemy speed and agility stats.
+                //     const string combatantPaddingString {' ', paddingBetweenCombatants};
+                //     const string statsPaddingString {' ', paddingBetweenStats};
+                //     newRow += speedLabel + playerSpeedDigits + statsPaddingString + agilityLabel + playerAgilityDigits; //Start with the player stats
+                //     newRow += combatantPaddingString; //Enemy stats start as soon as the combatant padding ends
+                //     newRow += speedLabel + enemySpeedDigits + statsPaddingString + agilityLabel + enemySpeedDigits;
+
+                //     const int longestStatRowLength = std::max(hpAndStrengthRowLength, speedAndAgilityRowLength);
+                //     x += longestStatRowLength; //Increase x to account for all of the characters we've added to this row.
+                // }
+                else{
+                    newRow.push_back(' ');
+                }
+
+                // newRow.push_back(' ');//In the console, rows are spaced so much further apart than columns. An extra space per visible character evens things out a little.
+            }
+
+            asciiRepresentation.push_back(newRow);
+        }
+
+        for(string row : asciiRepresentation){
+            cout << row << "\n";
+        }
+    };
 private:
+    GameDataManager* gameDataPtr;
+    const int paddingFromWalls = 2;
+    const int wallThickness = 1;
+
+
+    string getDigits(int input){
+        input = abs(input);//Not sure if negatives would impact this algorithm so just make sure the number is positive going forward
+
+        string digits;
+        if(input == 0){ //The following loop accounts for every number except 0, so handle that case here.
+            digits.push_back('0' + 0);
+        }
+
+        while(input != 0){//We handled the input = 0 case earlier, so the leftmost digit can't be 0, so we know we've recorded the last digit if input = 0 at this point.
+            char nextDigit = '0' + input % 10;
+            cout << "\n\nextDigit: " << nextDigit << "\n"; 
+
+            digits.push_back(nextDigit); //Digits are being added in "reverse" order, right to left. So 100 would become 001. The digits vector needs to be reversed before returning.
+
+            input = input / 10;
+        }
+
+        cout << "\n\nDigits: " << digits << "\n\n"; 
+
+        std::reverse(digits.begin(), digits.end());
+        return digits;
+    }
 };
 
 class IActionHandler: public IRoomVisitor{
@@ -641,7 +780,6 @@ private:
         cout << "\n";
         cout << "What will you do?\n";
 
-        //Keep track of the option number
         int optionNumber = 1;
 
         //Display weapon actions first, and then buff actions
@@ -769,7 +907,8 @@ int main(){
 
     //Initilize the game data and renderer
     unique_ptr<GameDataManager> gameDataManager = make_unique<GameDataManager>(player.get(), map.get());
-    unique_ptr<IRenderer> renderer = make_unique<TextRenderer>(gameDataManager.get());
+    // unique_ptr<IRenderer> renderer = make_unique<TextRenderer>(gameDataManager.get());
+    unique_ptr<IRenderer> renderer = make_unique<AsciiRenderer>(gameDataManager.get());
 
     //Initialize the ActionHandler
     unique_ptr<IActionHandler> actionHandler = make_unique<ConsoleActionHandler>(gameDataManager.get());
